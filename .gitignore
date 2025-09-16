@@ -1,0 +1,30 @@
+# 環境変数
+.env
+.env.local
+.env.production
+
+# プライベートキー
+*.key
+*.pem
+private-key.txt
+encrypted-keys/
+
+# ログ
+logs/
+*.log
+
+# 依存関係
+node_modules/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# テスト
+coverage/
+.nyc_output/
+
+# Railway
+.railway/
