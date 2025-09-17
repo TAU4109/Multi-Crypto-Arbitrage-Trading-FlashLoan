@@ -80,13 +80,13 @@ function validateConfig(): Config {
 class ArbitrageBotApp {
   private app: express.Application;
   private config: Config;
-  private provider: ethers.providers.Provider;
+  private provider!: ethers.providers.Provider;
   private wsProvider?: ethers.providers.WebSocketProvider;
-  private arbitrageEngine: ArbitrageEngine;
-  private telegramBot: TelegramBot;
-  private riskManager: RiskManager;
-  private performanceTracker: PerformanceTracker;
-  private mevProtection: MEVProtection;
+  private arbitrageEngine!: ArbitrageEngine;
+  private telegramBot!: TelegramBot;
+  private riskManager!: RiskManager;
+  private performanceTracker!: PerformanceTracker;
+  private mevProtection!: MEVProtection;
   private isRunning = false;
   private healthStatus = {
     status: 'starting',
@@ -155,7 +155,7 @@ class ArbitrageBotApp {
         res.json({ success: true, message: 'Emergency stop activated' });
       } catch (error) {
         logger.error('Emergency stop failed:', error);
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
       }
     });
 
@@ -240,7 +240,7 @@ class ArbitrageBotApp {
       logger.info(`Found ${opportunities.length} arbitrage opportunities`);
       
       // Record opportunities for analysis
-      opportunities.forEach(opp => this.performanceTracker.recordOpportunity(opp));
+      opportunities.forEach((opp: any) => this.performanceTracker.recordOpportunity(opp));
     });
 
     this.arbitrageEngine.on('tradeExecuted', async (result) => {

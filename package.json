@@ -15,7 +15,7 @@
     "health": "curl http://localhost:3000/health"
   },
   "dependencies": {
-    "@balancer-labs/v2-interfaces": "^1.4.0",
+    "@balancer-labs/v2-interfaces": "^0.4.0",
     "@openzeppelin/contracts": "^4.9.3",
     "@uniswap/v3-sdk": "^3.10.0",
     "@uniswap/sdk-core": "^4.0.7",

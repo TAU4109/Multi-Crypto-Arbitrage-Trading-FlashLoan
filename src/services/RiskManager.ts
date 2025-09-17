@@ -99,7 +99,7 @@ export class RiskManager extends EventEmitter {
     const opportunityRisk = this.calculateOpportunityRisk(opportunity);
 
     // Check individual risk limits
-    const riskChecks = [
+    const riskChecks = await Promise.all([
       this.checkDailyLossLimit(),
       this.checkConsecutiveLossLimit(),
       this.checkVolatilityLimit(opportunity),
@@ -108,7 +108,7 @@ export class RiskManager extends EventEmitter {
       this.checkDrawdownLimit(),
       this.checkTradeFrequencyLimit(),
       this.checkGasThreshold()
-    ];
+    ]);
 
     const failedChecks = riskChecks.filter(check => !check.passed);
 

@@ -255,7 +255,7 @@ export class MEVProtection {
   ): Promise<{ isSandwich: boolean; confidence: number; details: string }> {
     try {
       // Get pending transactions from mempool
-      const pending = await this.provider.send('txpool_content', []);
+      const pending = await (this.provider as any).send('txpool_content', []);
       const pendingTxs = Object.values(pending.pending || {}).flat();
 
       // Look for suspicious patterns
@@ -331,14 +331,14 @@ export class MEVProtection {
     targetTx: ethers.ContractTransaction
   ): Promise<any[]> {
     try {
-      const pending = await this.provider.send('txpool_content', []);
+      const pending = await (this.provider as any).send('txpool_content', []);
       const pendingTxs = Object.values(pending.pending || {}).flat();
 
       // Look for other flash loan transactions
       const flashLoanSelector = '0x5cffe9de'; // flashLoan function selector
       
-      return pendingTxs.filter(tx => 
-        tx.input?.startsWith(flashLoanSelector) && 
+      return pendingTxs.filter((tx: any) =>
+        tx.input?.startsWith(flashLoanSelector) &&
         tx.hash !== targetTx.hash
       );
     } catch (error) {
