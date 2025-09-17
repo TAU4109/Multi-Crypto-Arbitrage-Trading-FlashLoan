@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import { ethers } from 'ethers';
 import dotenv from 'dotenv';
 import { ArbitrageEngine } from './services/ArbitrageEngine';
@@ -116,7 +116,7 @@ class ArbitrageBotApp {
     this.app.use(express.urlencoded({ extended: true }));
 
     // Health check endpoint
-    this.app.get('/health', (req, res) => {
+    this.app.get('/health', (req: Request, res: Response) => {
       this.updateHealthStatus();
       const isHealthy = Object.values(this.healthStatus.components).every(status => status);
       
@@ -124,7 +124,7 @@ class ArbitrageBotApp {
     });
 
     // Status endpoint
-    this.app.get('/status', (req, res) => {
+    this.app.get('/status', (req: Request, res: Response) => {
       const stats = this.arbitrageEngine.getStats();
       const metrics = this.performanceTracker.getMetrics();
       const riskMetrics = this.riskManager.getMetrics();
@@ -143,13 +143,13 @@ class ArbitrageBotApp {
     });
 
     // Metrics endpoint for monitoring
-    this.app.get('/metrics', (req, res) => {
+    this.app.get('/metrics', (req: Request, res: Response) => {
       const report = this.performanceTracker.generatePerformanceReport();
       res.json(report);
     });
 
     // Emergency stop endpoint
-    this.app.post('/emergency-stop', async (req, res) => {
+    this.app.post('/emergency-stop', async (req: Request, res: Response) => {
       try {
         await this.emergencyStop();
         res.json({ success: true, message: 'Emergency stop activated' });
