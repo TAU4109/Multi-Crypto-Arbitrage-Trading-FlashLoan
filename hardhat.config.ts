@@ -17,13 +17,13 @@ const config: HardhatUserConfig = {
   },
   networks: {
     polygon: {
-      url: process.env.POLYGON_RPC_URL || "https://polygon-rpc.com",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      gasPrice: 50000000000, // 50 Gwei
+      url: "https://polygon-rpc.com",
+      accounts: [`0x616ab46951874d297de93f059b44055a7fb85909b8b46d0b7befd29eaed361c3`],
+      chainId: 137,
     },
     polygonMumbai: {
-      url: "https://rpc-mumbai.maticvigil.com",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      url: "https://rpc.ankr.com/polygon_mumbai",
+      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : ["0x0000000000000000000000000000000000000000000000000000000000000001"],
     },
     localhost: {
       url: "http://127.0.0.1:8545",

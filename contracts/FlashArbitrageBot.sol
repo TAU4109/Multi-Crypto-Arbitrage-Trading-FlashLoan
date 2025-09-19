@@ -6,8 +6,8 @@ import "@balancer-labs/v2-interfaces/contracts/vault/IFlashLoanRecipient.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20 as OZIERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 interface IUniswapV3Router {
     struct ExactInputSingleParams {
@@ -43,7 +43,7 @@ interface IQuickSwapRouter {
 }
 
 contract FlashArbitrageBot is IFlashLoanRecipient, ReentrancyGuard, Ownable, Pausable {
-    using SafeERC20 for IERC20;
+    using SafeERC20 for OZIERC20;
     
     IVault private constant VAULT = IVault(0xBA12222222228d8Ba445958a75a0704d566BF2C8);
     
@@ -142,7 +142,6 @@ contract FlashArbitrageBot is IFlashLoanRecipient, ReentrancyGuard, Ownable, Pau
         
         ArbitrageParams memory params = abi.decode(userData, (ArbitrageParams));
         
-        uint256 initialBalance = tokens[0].balanceOf(address(this));
         uint256 profit = _performArbitrage(tokens[0], amounts[0], params);
         
         if (profit < params.minProfit) {
@@ -151,7 +150,7 @@ contract FlashArbitrageBot is IFlashLoanRecipient, ReentrancyGuard, Ownable, Pau
         
         for (uint256 i = 0; i < tokens.length; i++) {
             uint256 amountOwing = amounts[i] + feeAmounts[i];
-            tokens[i].safeTransfer(address(VAULT), amountOwing);
+            OZIERC20(address(tokens[i])).safeTransfer(address(VAULT), amountOwing);
         }
         
         emit ArbitrageExecuted(
@@ -169,7 +168,7 @@ contract FlashArbitrageBot is IFlashLoanRecipient, ReentrancyGuard, Ownable, Pau
         uint256 amount,
         ArbitrageParams memory params
     ) internal returns (uint256 profit) {
-        uint256 balanceBefore = token.balanceOf(address(this));
+        uint256 balanceBefore = OZIERC20(address(token)).balanceOf(address(this));
         
         uint256 intermediateAmount;
         if (params.sourceExchange == uint8(Exchange.UNISWAP)) {
@@ -202,7 +201,7 @@ contract FlashArbitrageBot is IFlashLoanRecipient, ReentrancyGuard, Ownable, Pau
             finalAmount = _swapOnQuickSwap(reversePath, intermediateAmount);
         }
         
-        uint256 balanceAfter = token.balanceOf(address(this));
+        uint256 balanceAfter = OZIERC20(address(token)).balanceOf(address(this));
         profit = balanceAfter > balanceBefore ? balanceAfter - balanceBefore : 0;
         
         return profit;
@@ -214,7 +213,7 @@ contract FlashArbitrageBot is IFlashLoanRecipient, ReentrancyGuard, Ownable, Pau
         uint256 amountIn,
         uint24 fee
     ) internal returns (uint256 amountOut) {
-        IERC20(tokenIn).safeApprove(UNISWAP_ROUTER, amountIn);
+        OZIERC20(tokenIn).safeApprove(UNISWAP_ROUTER, amountIn);
         
         IUniswapV3Router.ExactInputSingleParams memory params = IUniswapV3Router
             .ExactInputSingleParams({
@@ -235,7 +234,7 @@ contract FlashArbitrageBot is IFlashLoanRecipient, ReentrancyGuard, Ownable, Pau
         address[] memory path,
         uint256 amountIn
     ) internal returns (uint256 amountOut) {
-        IERC20(path[0]).safeApprove(QUICKSWAP_ROUTER, amountIn);
+        OZIERC20(path[0]).safeApprove(QUICKSWAP_ROUTER, amountIn);
         
         uint256[] memory amounts = IQuickSwapRouter(QUICKSWAP_ROUTER)
             .swapExactTokensForTokens(
@@ -271,7 +270,7 @@ contract FlashArbitrageBot is IFlashLoanRecipient, ReentrancyGuard, Ownable, Pau
     }
     
     function withdrawToken(address token, uint256 amount) external onlyOwner {
-        IERC20(token).safeTransfer(owner(), amount);
+        OZIERC20(token).safeTransfer(owner(), amount);
     }
     
     function withdrawETH() external onlyOwner {
