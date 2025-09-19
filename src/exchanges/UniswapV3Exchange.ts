@@ -10,10 +10,15 @@ const UNISWAP_V3_ROUTER_ABI = [
   'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) external payable returns (uint256 amountOut)'
 ];
 
+const UNISWAP_V3_FACTORY_ABI = [
+  'function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)'
+];
+
 export class UniswapV3Exchange extends BaseExchange {
   private quoterAddress: string;
   private quoterContract: ethers.Contract;
   private routerContract: ethers.Contract;
+  private factoryContract: ethers.Contract;
   private fees: number[] = [500, 3000, 10000]; // 0.05%, 0.3%, 1%
 
   constructor(
@@ -25,6 +30,10 @@ export class UniswapV3Exchange extends BaseExchange {
     this.quoterAddress = quoterAddress;
     this.quoterContract = new ethers.Contract(quoterAddress, UNISWAP_V3_QUOTER_ABI, provider);
     this.routerContract = new ethers.Contract(routerAddress, UNISWAP_V3_ROUTER_ABI, provider);
+
+    // Factory contract for checking pool existence
+    const factoryAddress = '0x1F98431c8aD98523631AE4a59f267346ea31F984';
+    this.factoryContract = new ethers.Contract(factoryAddress, UNISWAP_V3_FACTORY_ABI, provider);
   }
 
   async getQuote(
@@ -33,9 +42,26 @@ export class UniswapV3Exchange extends BaseExchange {
     amountIn: BigNumber
   ): Promise<QuoteResult> {
     let bestQuote: QuoteResult | null = null;
-    
+
+    // Validate inputs
+    if (!tokenIn.address || !tokenOut.address || amountIn.lte(0)) {
+      throw new Error('Invalid input parameters for quote');
+    }
+
+    // Check if tokens are the same
+    if (tokenIn.address.toLowerCase() === tokenOut.address.toLowerCase()) {
+      throw new Error('Cannot quote for same token');
+    }
+
     for (const fee of this.fees) {
       try {
+        // First check if the pool exists by calling the factory
+        const poolAddress = await this.getPoolAddress(tokenIn.address, tokenOut.address, fee);
+        if (poolAddress === ethers.constants.AddressZero) {
+          console.log(`Pool does not exist for ${tokenIn.symbol}/${tokenOut.symbol} with fee ${fee}`);
+          continue;
+        }
+
         const amountOut = await this.quoterContract.callStatic.quoteExactInputSingle(
           tokenIn.address,
           tokenOut.address,
@@ -66,13 +92,18 @@ export class UniswapV3Exchange extends BaseExchange {
             bestQuote = quote;
           }
         }
-      } catch (error) {
-        console.warn(`Uniswap V3 quote failed for fee ${fee}:`, error);
+      } catch (error: any) {
+        // Log specific error types for debugging
+        if (error.code === 'CALL_EXCEPTION') {
+          console.warn(`Uniswap V3 CALL_EXCEPTION for ${tokenIn.symbol}/${tokenOut.symbol} fee ${fee}: Pool likely doesn't exist or has no liquidity`);
+        } else {
+          console.warn(`Uniswap V3 quote failed for fee ${fee}:`, error.message || error);
+        }
       }
     }
 
     if (!bestQuote) {
-      throw new Error(`No valid Uniswap V3 quote found for ${tokenIn.symbol} -> ${tokenOut.symbol}`);
+      throw new Error(`No valid Uniswap V3 quote found for ${tokenIn.symbol} -> ${tokenOut.symbol}. Pools may not exist or have insufficient liquidity.`);
     }
 
     return bestQuote;
@@ -112,6 +143,12 @@ export class UniswapV3Exchange extends BaseExchange {
 
     for (const fee of this.fees) {
       try {
+        // Check if pool exists first
+        const poolAddress = await this.getPoolAddress(tokenIn.address, tokenOut.address, fee);
+        if (poolAddress === ethers.constants.AddressZero) {
+          continue;
+        }
+
         const amountOut = await this.quoterContract.callStatic.quoteExactInputSingle(
           tokenIn.address,
           tokenOut.address,
@@ -125,11 +162,25 @@ export class UniswapV3Exchange extends BaseExchange {
           bestFee = fee;
         }
       } catch (error) {
-        // Fee tier might not exist for this pair
+        // Fee tier might not exist for this pair or have insufficient liquidity
+        console.warn(`Failed to get quote for fee ${fee}:`, error);
       }
     }
 
     return bestFee;
+  }
+
+  private async getPoolAddress(
+    tokenA: string,
+    tokenB: string,
+    fee: number
+  ): Promise<string> {
+    try {
+      return await this.factoryContract.getPool(tokenA, tokenB, fee);
+    } catch (error) {
+      console.warn(`Failed to get pool address for ${tokenA}/${tokenB} fee ${fee}:`, error);
+      return ethers.constants.AddressZero;
+    }
   }
 
   private async estimateSwapGas(
