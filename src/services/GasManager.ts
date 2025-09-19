@@ -44,18 +44,27 @@ export class GasManager {
   async getCurrentGasPrice(): Promise<GasPrice> {
     try {
       const response = await axios.get(this.gasStationUrl, {
-        timeout: 5000
+        timeout: 5000,
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'ArbitrageBot/1.0'
+        }
       });
-      
+
       const data = response.data;
-      
+
+      // Validate response data structure
+      if (!data || !data.safeLow || !data.standard || !data.fast) {
+        throw new Error('Invalid response structure from gas station');
+      }
+
       return {
-        safeLow: this.gweiToBigNumber(data.safeLow.maxFee),
-        standard: this.gweiToBigNumber(data.standard.maxFee),
-        fast: this.gweiToBigNumber(data.fast.maxFee),
-        instant: this.gweiToBigNumber(data.instant.maxFee),
-        baseFee: this.gweiToBigNumber(data.estimatedBaseFee),
-        priorityFee: this.gweiToBigNumber(data.standard.maxPriorityFee)
+        safeLow: this.gweiToBigNumber(data.safeLow.maxFee || data.safeLow),
+        standard: this.gweiToBigNumber(data.standard.maxFee || data.standard),
+        fast: this.gweiToBigNumber(data.fast.maxFee || data.fast),
+        instant: this.gweiToBigNumber(data.instant?.maxFee || data.fast.maxFee || data.fast),
+        baseFee: this.gweiToBigNumber(data.estimatedBaseFee || 20),
+        priorityFee: this.gweiToBigNumber(data.standard.maxPriorityFee || data.standard || 1)
       };
     } catch (error) {
       console.warn('Failed to fetch gas prices from station, using fallback:', error);
@@ -194,7 +203,11 @@ export class GasManager {
     };
   }
 
-  private gweiToBigNumber(gwei: number): BigNumber {
+  private gweiToBigNumber(gwei: number | string | undefined): BigNumber {
+    if (gwei === undefined || gwei === null) {
+      // Return a safe default if value is undefined
+      return ethers.utils.parseUnits('30', 'gwei');
+    }
     return ethers.utils.parseUnits(gwei.toString(), 'gwei');
   }
 
