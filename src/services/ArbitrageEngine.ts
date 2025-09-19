@@ -22,6 +22,8 @@ export class ArbitrageEngine extends EventEmitter {
   private scanInterval?: NodeJS.Timeout;
   private lastScanTimestamp: number = 0;
   private opportunityHistory: Map<string, ArbitrageOpportunity[]> = new Map();
+  private consecutiveEmptyScans: number = 0;
+  private dynamicScanInterval: number;
 
   constructor(
     provider: ethers.providers.Provider,
@@ -32,6 +34,7 @@ export class ArbitrageEngine extends EventEmitter {
     this.batchQuoteEngine = new BatchQuoteEngine(provider);
     this.gasManager = new GasManager(provider);
     this.config = config;
+    this.dynamicScanInterval = config.updateIntervalMs;
   }
 
   async start(): Promise<void> {

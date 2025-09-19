@@ -20,6 +20,8 @@ export class UniswapV3Exchange extends BaseExchange {
   private routerContract: ethers.Contract;
   private factoryContract: ethers.Contract;
   private fees: number[] = [500, 3000, 10000]; // 0.05%, 0.3%, 1%
+  private poolCache: Map<string, string> = new Map(); // Cache pool addresses
+  private lastCacheClear: number = Date.now();
 
   constructor(
     provider: ethers.providers.Provider,
@@ -175,10 +177,33 @@ export class UniswapV3Exchange extends BaseExchange {
     tokenB: string,
     fee: number
   ): Promise<string> {
+    // Clear cache every hour to ensure freshness
+    if (Date.now() - this.lastCacheClear > 3600000) {
+      this.poolCache.clear();
+      this.lastCacheClear = Date.now();
+    }
+
+    // Create cache key
+    const cacheKey = `${tokenA.toLowerCase()}-${tokenB.toLowerCase()}-${fee}`;
+
+    // Check cache first
+    if (this.poolCache.has(cacheKey)) {
+      return this.poolCache.get(cacheKey)!;
+    }
+
     try {
-      return await this.factoryContract.getPool(tokenA, tokenB, fee);
+      const poolAddress = await this.factoryContract.getPool(tokenA, tokenB, fee);
+
+      // Cache the result
+      this.poolCache.set(cacheKey, poolAddress);
+
+      return poolAddress;
     } catch (error) {
       console.warn(`Failed to get pool address for ${tokenA}/${tokenB} fee ${fee}:`, error);
+
+      // Cache the failure too to avoid repeated calls
+      this.poolCache.set(cacheKey, ethers.constants.AddressZero);
+
       return ethers.constants.AddressZero;
     }
   }
