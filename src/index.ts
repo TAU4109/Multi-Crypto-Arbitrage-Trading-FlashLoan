@@ -48,10 +48,7 @@ interface Config {
 function validateConfig(): Config {
   const requiredEnvVars = [
     'PRIVATE_KEY',
-    'POLYGON_RPC_URL',
-    'TELEGRAM_BOT_TOKEN',
-    'TELEGRAM_CHAT_ID',
-    'ADMIN_USER_ID'
+    'POLYGON_RPC_URL'
   ];
 
   for (const envVar of requiredEnvVars) {
@@ -59,6 +56,11 @@ function validateConfig(): Config {
       throw new Error(`Missing required environment variable: ${envVar}`);
     }
   }
+
+  // Telegram variables are optional in production
+  const telegramEnabled = process.env.TELEGRAM_BOT_TOKEN &&
+                         process.env.TELEGRAM_CHAT_ID &&
+                         process.env.ADMIN_USER_ID;
 
   return {
     privateKey: process.env.PRIVATE_KEY!,
@@ -69,9 +71,9 @@ function validateConfig(): Config {
     maxSlippage: parseFloat(process.env.MAX_SLIPPAGE || '0.5'),
     maxTradeSize: parseFloat(process.env.MAX_TRADE_SIZE || '100000'),
     dailyLossLimit: parseFloat(process.env.DAILY_LOSS_LIMIT || '0.02'),
-    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN!,
-    telegramChatId: process.env.TELEGRAM_CHAT_ID!,
-    adminUserId: process.env.ADMIN_USER_ID!,
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+    adminUserId: process.env.ADMIN_USER_ID || '',
     port: parseInt(process.env.PORT || '3000'),
     initialCapital: parseFloat(process.env.INITIAL_CAPITAL || '10000')
   };
@@ -83,7 +85,7 @@ class ArbitrageBotApp {
   private provider!: ethers.providers.Provider;
   private wsProvider?: ethers.providers.WebSocketProvider;
   private arbitrageEngine!: ArbitrageEngine;
-  private telegramBot!: TelegramBot;
+  private telegramBot?: TelegramBot;
   private riskManager!: RiskManager;
   private performanceTracker!: PerformanceTracker;
   private mevProtection!: MEVProtection;
@@ -223,21 +225,23 @@ class ArbitrageBotApp {
       }
     );
 
-    // Initialize Telegram bot
-    this.telegramBot = new TelegramBot(
-      {
-        botToken: this.config.telegramBotToken,
-        chatId: this.config.telegramChatId,
-        adminUserId: this.config.adminUserId,
-        enableAlerts: true,
-        alertThresholds: {
-          minProfitUSD: 10,
-          maxLossUSD: 100,
-          errorAlerts: true
-        }
-      },
-      this.arbitrageEngine
-    );
+    // Initialize Telegram bot (only if token is provided)
+    if (this.config.telegramBotToken) {
+      this.telegramBot = new TelegramBot(
+        {
+          botToken: this.config.telegramBotToken,
+          chatId: this.config.telegramChatId,
+          adminUserId: this.config.adminUserId,
+          enableAlerts: true,
+          alertThresholds: {
+            minProfitUSD: 10,
+            maxLossUSD: 100,
+            errorAlerts: true
+          }
+        },
+        this.arbitrageEngine
+      );
+    }
 
     this.setupEventListeners();
   }
@@ -327,8 +331,19 @@ class ArbitrageBotApp {
       await this.validateConnections();
 
       // Start services
-      await this.telegramBot.start();
-      this.healthStatus.components.telegram = true;
+      if (this.config.telegramBotToken && this.telegramBot) {
+        try {
+          await this.telegramBot.start();
+          this.healthStatus.components.telegram = true;
+          logger.info('✅ Telegram bot started');
+        } catch (error) {
+          logger.warn('⚠️ Telegram bot failed to start, continuing without it:', error);
+          this.healthStatus.components.telegram = false;
+        }
+      } else {
+        logger.info('ℹ️ Telegram bot disabled (no token provided)');
+        this.healthStatus.components.telegram = false;
+      }
 
       await this.arbitrageEngine.start();
       this.healthStatus.components.arbitrageEngine = true;
@@ -423,7 +438,9 @@ class ArbitrageBotApp {
       
       // Stop services
       await this.arbitrageEngine.stop();
-      await this.telegramBot.stop();
+      if (this.telegramBot) {
+        await this.telegramBot.stop();
+      }
       
       // Close providers
       if (this.wsProvider) {
