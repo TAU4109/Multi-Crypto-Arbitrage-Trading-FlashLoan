@@ -58,9 +58,18 @@ function validateConfig(): Config {
   }
 
   // Telegram variables are optional in production
-  const telegramEnabled = process.env.TELEGRAM_BOT_TOKEN &&
-                         process.env.TELEGRAM_CHAT_ID &&
-                         process.env.ADMIN_USER_ID;
+  // Check for valid Telegram credentials (not placeholder values)
+  const isValidTelegramToken = (token?: string) => {
+    return token &&
+           token.trim() !== '' &&
+           !token.includes('your_') &&
+           !token.includes('*****') &&
+           token.length > 10;
+  };
+
+  const telegramEnabled = isValidTelegramToken(process.env.TELEGRAM_BOT_TOKEN) &&
+                         isValidTelegramToken(process.env.TELEGRAM_CHAT_ID) &&
+                         isValidTelegramToken(process.env.ADMIN_USER_ID);
 
   return {
     privateKey: process.env.PRIVATE_KEY!,
@@ -111,6 +120,20 @@ class ArbitrageBotApp {
     this.setupExpress();
     this.setupProviders();
     this.initializeServices();
+  }
+
+  private isTelegramConfigValid(): boolean {
+    const isValidToken = (token: string) => {
+      return Boolean(token &&
+                    token.trim() !== '' &&
+                    !token.includes('your_') &&
+                    !token.includes('*****') &&
+                    token.length > 10);
+    };
+
+    return isValidToken(this.config.telegramBotToken) &&
+           isValidToken(this.config.telegramChatId) &&
+           isValidToken(this.config.adminUserId);
   }
 
   private setupExpress(): void {
@@ -225,8 +248,8 @@ class ArbitrageBotApp {
       }
     );
 
-    // Initialize Telegram bot (only if token is provided)
-    if (this.config.telegramBotToken) {
+    // Initialize Telegram bot (only if valid token is provided)
+    if (this.isTelegramConfigValid()) {
       this.telegramBot = new TelegramBot(
         {
           botToken: this.config.telegramBotToken,
@@ -327,11 +350,25 @@ class ArbitrageBotApp {
     try {
       logger.info('Starting Polygon Flash Arbitrage Bot...');
 
-      // Validate connections
-      await this.validateConnections();
+      // Start HTTP server first to enable health checks
+      this.app.listen(this.config.port, () => {
+        logger.info(`Server running on port ${this.config.port}`);
+      });
+
+      this.isRunning = true;
+      this.healthStatus.status = 'starting';
+
+      // Validate connections (non-blocking for health checks)
+      try {
+        await this.validateConnections();
+        logger.info('✅ Blockchain connections validated');
+      } catch (error) {
+        logger.warn('⚠️ Blockchain validation failed, continuing with limited functionality:', error);
+        this.healthStatus.components.rpc = false;
+      }
 
       // Start services
-      if (this.config.telegramBotToken && this.telegramBot) {
+      if (this.isTelegramConfigValid() && this.telegramBot) {
         try {
           await this.telegramBot.start();
           this.healthStatus.components.telegram = true;
@@ -341,29 +378,47 @@ class ArbitrageBotApp {
           this.healthStatus.components.telegram = false;
         }
       } else {
-        logger.info('ℹ️ Telegram bot disabled (no token provided)');
+        logger.info('ℹ️ Telegram bot disabled (no valid credentials provided)');
         this.healthStatus.components.telegram = false;
       }
 
-      await this.arbitrageEngine.start();
-      this.healthStatus.components.arbitrageEngine = true;
+      // Start arbitrage engine (if blockchain connection is available)
+      if (this.healthStatus.components.rpc) {
+        try {
+          await this.arbitrageEngine.start();
+          this.healthStatus.components.arbitrageEngine = true;
+          logger.info('✅ Arbitrage engine started');
+        } catch (error) {
+          logger.warn('⚠️ Arbitrage engine failed to start:', error);
+          this.healthStatus.components.arbitrageEngine = false;
+        }
+      } else {
+        logger.warn('⚠️ Arbitrage engine disabled due to blockchain connection issues');
+        this.healthStatus.components.arbitrageEngine = false;
+      }
 
-      // Start HTTP server
-      this.app.listen(this.config.port, () => {
-        logger.info(`Server running on port ${this.config.port}`);
-      });
+      const healthyComponents = Object.values(this.healthStatus.components).filter(Boolean).length;
+      const totalComponents = Object.values(this.healthStatus.components).length;
 
-      this.isRunning = true;
-      this.healthStatus.status = 'healthy';
+      if (healthyComponents > 0) {
+        this.healthStatus.status = healthyComponents === totalComponents ? 'healthy' : 'degraded';
+        logger.info(`🚀 Arbitrage bot started with ${healthyComponents}/${totalComponents} components healthy`);
+      } else {
+        this.healthStatus.status = 'unhealthy';
+        logger.warn('⚠️ Arbitrage bot started but no components are healthy');
+      }
 
-      logger.info('🚀 Arbitrage bot started successfully!');
-      logger.info(`📊 Monitoring ${Object.keys(require('./types').TOKENS).length} token pairs`);
       logger.info(`💰 Initial capital: $${this.config.initialCapital.toLocaleString()}`);
       logger.info(`🎯 Min profit threshold: ${(this.config.minProfitThreshold * 100).toFixed(2)}%`);
 
     } catch (error) {
       logger.error('Failed to start bot:', error);
-      throw error;
+      // Don't throw error if server is already running
+      if (this.isRunning) {
+        logger.warn('Server is running despite startup errors');
+      } else {
+        throw error;
+      }
     }
   }
 
