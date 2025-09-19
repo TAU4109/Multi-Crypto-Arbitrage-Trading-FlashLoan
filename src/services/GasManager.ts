@@ -58,13 +58,21 @@ export class GasManager {
         throw new Error('Invalid response structure from gas station');
       }
 
+      // Safely extract gas price values with proper fallbacks
+      const safeLow = this.extractGasValue(data.safeLow, 25);
+      const standard = this.extractGasValue(data.standard, 30);
+      const fast = this.extractGasValue(data.fast, 35);
+      const instant = this.extractGasValue(data.instant, fast + 5);
+      const baseFee = this.extractGasValue(data, 20, 'estimatedBaseFee');
+      const priorityFee = this.extractGasValue(data.standard, 2, 'maxPriorityFee') || 1;
+
       return {
-        safeLow: this.gweiToBigNumber(data.safeLow.maxFee || data.safeLow),
-        standard: this.gweiToBigNumber(data.standard.maxFee || data.standard),
-        fast: this.gweiToBigNumber(data.fast.maxFee || data.fast),
-        instant: this.gweiToBigNumber(data.instant?.maxFee || data.fast.maxFee || data.fast),
-        baseFee: this.gweiToBigNumber(data.estimatedBaseFee || 20),
-        priorityFee: this.gweiToBigNumber(data.standard.maxPriorityFee || data.standard || 1)
+        safeLow: this.gweiToBigNumber(safeLow),
+        standard: this.gweiToBigNumber(standard),
+        fast: this.gweiToBigNumber(fast),
+        instant: this.gweiToBigNumber(instant),
+        baseFee: this.gweiToBigNumber(baseFee),
+        priorityFee: this.gweiToBigNumber(priorityFee)
       };
     } catch (error) {
       console.warn('Failed to fetch gas prices from station, using fallback:', error);
@@ -188,10 +196,34 @@ export class GasManager {
     }
   }
 
+  private extractGasValue(data: any, fallback: number, key: string = 'maxFee'): number {
+    if (!data) return fallback;
+
+    // Try to get the value from the specified key
+    let value = data[key] || data;
+
+    // If it's still an object, try common gas price property names
+    if (typeof value === 'object' && value !== null) {
+      value = value.maxFee || value.gasPrice || value.price || fallback;
+    }
+
+    // Convert to number and validate
+    const numValue = typeof value === 'string' ? parseFloat(value) : Number(value);
+
+    // Return fallback if invalid
+    if (isNaN(numValue) || numValue <= 0) {
+      return fallback;
+    }
+
+    return numValue;
+  }
+
   private getFallbackGasPrice(): GasPrice {
     // Conservative fallback gas prices in Gwei
     const base = this.gweiToBigNumber(30);
     const priority = this.gweiToBigNumber(1);
+
+    console.log('Using fallback gas prices due to API failure');
 
     return {
       safeLow: base.add(priority),
@@ -208,7 +240,27 @@ export class GasManager {
       // Return a safe default if value is undefined
       return ethers.utils.parseUnits('30', 'gwei');
     }
-    return ethers.utils.parseUnits(gwei.toString(), 'gwei');
+
+    let gweiValue: number;
+
+    // Handle scientific notation and convert to regular decimal
+    if (typeof gwei === 'string') {
+      gweiValue = parseFloat(gwei);
+    } else {
+      gweiValue = gwei;
+    }
+
+    // Ensure the value is reasonable (between 0.1 and 1000 gwei)
+    if (isNaN(gweiValue) || gweiValue < 0.1) {
+      gweiValue = 30; // Default fallback
+    } else if (gweiValue > 1000) {
+      gweiValue = 1000; // Cap at 1000 gwei
+    }
+
+    // Convert to string with proper decimal places to avoid scientific notation
+    const gweiString = gweiValue.toFixed(9);
+
+    return ethers.utils.parseUnits(gweiString, 'gwei');
   }
 
   private weiToUSD(wei: BigNumber): number {
