@@ -92,6 +92,12 @@ export const TOKENS: Record<string, TokenInfo> = {
     symbol: 'WBTC',
     decimals: 8,
     name: 'Wrapped BTC'
+  },
+  USDT: {
+    address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
+    symbol: 'USDT',
+    decimals: 6,
+    name: 'Tether USD'
   }
 };
 

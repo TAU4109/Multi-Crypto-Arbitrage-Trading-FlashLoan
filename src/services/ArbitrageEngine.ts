@@ -355,11 +355,21 @@ export class ArbitrageEngine extends EventEmitter {
     const tokens = Object.values(TOKENS);
     const pairs: Array<{ tokenA: TokenInfo; tokenB: TokenInfo }> = [];
 
-    // Focus on most liquid and stable pairs only
+    // Focus on most liquid and stable pairs with recommended additions
     const priorityPairs = [
+      // Tier 1 - Highest liquidity (existing)
       ['WMATIC', 'USDC'], // Most liquid on Polygon
-      ['USDC', 'USDC.e'], // Bridge arbitrage
-      ['WETH', 'USDC']    // ETH pairs
+      ['WETH', 'USDC'],   // ETH pairs
+      ['USDC', 'USDC.e'], // Bridge arbitrage (safest)
+
+      // Tier 2 - High liquidity additions
+      ['USDC', 'USDT'],   // Stablecoin arbitrage
+      ['WMATIC', 'WETH'], // Major token pair
+      ['DAI', 'USDC'],    // Stablecoin arbitrage
+
+      // Tier 3 - Medium liquidity additions
+      ['WBTC', 'WETH'],   // BTC/ETH pair
+      ['WMATIC', 'USDT']  // MATIC/USDT pair
     ];
 
     for (const [symbolA, symbolB] of priorityPairs) {
