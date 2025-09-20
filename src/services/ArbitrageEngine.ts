@@ -83,50 +83,97 @@ export class ArbitrageEngine extends EventEmitter {
     this.lastScanTimestamp = startTime;
 
     try {
-      // Check if gas price is acceptable
-      const gasAcceptable = await this.gasManager.isGasPriceAcceptable(
+      console.log(`Starting arbitrage scan at ${new Date().toISOString()}`);
+
+      // Check if gas price is acceptable with timeout
+      const gasCheckPromise = this.gasManager.isGasPriceAcceptable(
         this.config.gasLimitGwei,
         'medium'
       );
 
+      const gasAcceptable = await Promise.race([
+        gasCheckPromise,
+        new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            console.warn('Gas price check timeout, proceeding with scan');
+            resolve(true);
+          }, 5000);
+        })
+      ]);
+
       if (!gasAcceptable) {
         console.log('Gas price too high, skipping scan');
+        this.consecutiveEmptyScans++;
         return;
       }
 
-      const opportunities = await this.findArbitrageOpportunities();
-      
+      // Add timeout to the entire opportunity finding process
+      const opportunitiesPromise = this.findArbitrageOpportunities();
+      const scanTimeout = new Promise<ArbitrageOpportunity[]>((resolve) => {
+        setTimeout(() => {
+          console.warn('Opportunity scan timeout, returning empty results');
+          resolve([]);
+        }, 30000); // 30 second timeout
+      });
+
+      const opportunities = await Promise.race([opportunitiesPromise, scanTimeout]);
+
       // Filter and rank opportunities
       const viableOpportunities = opportunities
-        .filter(op => this.isOpportunityViable(op))
-        .sort((a, b) => b.netProfit.sub(a.netProfit).gt(0) ? 1 : -1)
+        .filter(op => {
+          try {
+            return this.isOpportunityViable(op);
+          } catch (error) {
+            console.warn('Error checking opportunity viability:', error);
+            return false;
+          }
+        })
+        .sort((a, b) => {
+          try {
+            return b.netProfit.sub(a.netProfit).gt(0) ? 1 : -1;
+          } catch (error) {
+            return 0;
+          }
+        })
         .slice(0, 5); // Top 5 opportunities
 
       if (viableOpportunities.length > 0) {
+        console.log(`Found ${viableOpportunities.length} viable opportunities`);
+        this.consecutiveEmptyScans = 0;
         this.emit('opportunities', viableOpportunities);
-        
+
         // Store in history for analysis
-        const pairKey = `${viableOpportunities[0].tokenA.symbol}-${viableOpportunities[0].tokenB.symbol}`;
-        if (!this.opportunityHistory.has(pairKey)) {
-          this.opportunityHistory.set(pairKey, []);
+        try {
+          const pairKey = `${viableOpportunities[0].tokenA.symbol}-${viableOpportunities[0].tokenB.symbol}`;
+          if (!this.opportunityHistory.has(pairKey)) {
+            this.opportunityHistory.set(pairKey, []);
+          }
+          this.opportunityHistory.get(pairKey)!.push(...viableOpportunities);
+
+          // Keep only last 100 opportunities per pair
+          if (this.opportunityHistory.get(pairKey)!.length > 100) {
+            this.opportunityHistory.get(pairKey)!.splice(0, 50);
+          }
+        } catch (historyError) {
+          console.warn('Error storing opportunity history:', historyError);
         }
-        this.opportunityHistory.get(pairKey)!.push(...viableOpportunities);
-        
-        // Keep only last 100 opportunities per pair
-        if (this.opportunityHistory.get(pairKey)!.length > 100) {
-          this.opportunityHistory.get(pairKey)!.splice(0, 50);
-        }
+      } else {
+        this.consecutiveEmptyScans++;
+        console.log(`No viable opportunities found (${this.consecutiveEmptyScans} consecutive empty scans)`);
       }
 
       const scanDuration = Date.now() - startTime;
+      console.log(`Scan completed in ${scanDuration}ms`);
+
       this.emit('scanCompleted', {
         duration: scanDuration,
         opportunitiesFound: opportunities.length,
         viableOpportunities: viableOpportunities.length
       });
 
-    } catch (error) {
-      console.error('Scan error:', error);
+    } catch (error: any) {
+      console.error('Scan error:', error.message || error);
+      this.consecutiveEmptyScans++;
       this.emit('scanError', error);
     }
   }
@@ -136,18 +183,34 @@ export class ArbitrageEngine extends EventEmitter {
     const tokenPairs = this.generateTokenPairs();
     const tradeAmounts = this.generateTradeAmounts();
 
-    for (const { tokenA, tokenB } of tokenPairs) {
-      for (const amount of tradeAmounts) {
-        try {
-          const opportunity = await this.analyzeTokenPair(tokenA, tokenB, amount);
-          if (opportunity) {
-            opportunities.push(opportunity);
+    // Limit concurrent operations to avoid overwhelming the RPC
+    const maxConcurrency = 3;
+    const analysisPromises: Promise<void>[] = [];
+
+    for (let i = 0; i < tokenPairs.length; i += maxConcurrency) {
+      const batch = tokenPairs.slice(i, i + maxConcurrency);
+
+      const batchPromise = Promise.all(
+        batch.map(async ({ tokenA, tokenB }) => {
+          // Only test the most liquid amount to reduce load
+          const amount = tradeAmounts[1]; // Use middle amount
+
+          try {
+            const opportunity = await this.analyzeTokenPair(tokenA, tokenB, amount);
+            if (opportunity) {
+              opportunities.push(opportunity);
+            }
+          } catch (error: any) {
+            console.warn(`Failed to analyze ${tokenA.symbol}-${tokenB.symbol}:`, error.message || error);
           }
-        } catch (error) {
-          console.warn(`Failed to analyze ${tokenA.symbol}-${tokenB.symbol}:`, error);
-        }
-      }
+        })
+      ).then(() => {});
+
+      analysisPromises.push(batchPromise);
     }
+
+    // Wait for all batches to complete
+    await Promise.allSettled(analysisPromises);
 
     return opportunities;
   }
@@ -157,24 +220,67 @@ export class ArbitrageEngine extends EventEmitter {
     tokenB: TokenInfo,
     amountIn: BigNumber
   ): Promise<ArbitrageOpportunity | null> {
-    // Get quotes from all DEXs for both directions
+    try {
+      // Add timeout for the entire analysis
+      const analysisTimeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`Token pair analysis timeout for ${tokenA.symbol}-${tokenB.symbol}`)), 15000);
+      });
+
+      const analysisPromise = this.performTokenPairAnalysis(tokenA, tokenB, amountIn);
+
+      return await Promise.race([analysisPromise, analysisTimeout]);
+    } catch (error: any) {
+      if (error.message?.includes('timeout')) {
+        console.warn(`Analysis timeout for ${tokenA.symbol}-${tokenB.symbol}`);
+      } else {
+        console.warn(`Analysis failed for ${tokenA.symbol}-${tokenB.symbol}:`, error.message || error);
+      }
+      return null;
+    }
+  }
+
+  private async performTokenPairAnalysis(
+    tokenA: TokenInfo,
+    tokenB: TokenInfo,
+    amountIn: BigNumber
+  ): Promise<ArbitrageOpportunity | null> {
+    // Get quotes with timeout
     const [forwardQuotes, reverseQuotes] = await Promise.all([
-      this.batchQuoteEngine.getBatchQuotes(tokenA, tokenB, amountIn),
-      this.batchQuoteEngine.getBatchQuotes(tokenB, tokenA, amountIn)
+      this.batchQuoteEngine.getBatchQuotes(tokenA, tokenB, amountIn, 8000),
+      this.batchQuoteEngine.getBatchQuotes(tokenB, tokenA, amountIn, 8000)
     ]);
 
-    if (forwardQuotes.length < 2 || reverseQuotes.length < 2) {
-      return null; // Need at least 2 exchanges for arbitrage
+    // Check if we have sufficient quotes for arbitrage
+    if (forwardQuotes.length === 0 || reverseQuotes.length === 0) {
+      return null;
     }
 
-    // Find best buy and sell prices
-    const bestBuy = forwardQuotes.reduce((best, current) => 
-      current.amountOut.gt(best.amountOut) ? current : best
-    );
-    
-    const bestSell = reverseQuotes.reduce((best, current) => 
-      current.amountOut.gt(best.amountOut) ? current : best
-    );
+    // If we only have one quote per direction, we can't do arbitrage
+    if (forwardQuotes.length < 2 && reverseQuotes.length < 2) {
+      return null;
+    }
+
+    // Find best quotes from different exchanges
+    let bestBuy: QuoteResult | null = null;
+    let bestSell: QuoteResult | null = null;
+
+    // For forward direction (tokenA -> tokenB)
+    for (const quote of forwardQuotes) {
+      if (!bestBuy || quote.amountOut.gt(bestBuy.amountOut)) {
+        bestBuy = quote;
+      }
+    }
+
+    // For reverse direction (tokenB -> tokenA)
+    for (const quote of reverseQuotes) {
+      if (!bestSell || quote.amountOut.gt(bestSell.amountOut)) {
+        bestSell = quote;
+      }
+    }
+
+    if (!bestBuy || !bestSell || bestBuy.dex === bestSell.dex) {
+      return null; // Need different exchanges for arbitrage
+    }
 
     // Calculate arbitrage potential
     const buyPrice = this.calculatePrice(amountIn, bestBuy.amountOut, tokenA.decimals, tokenB.decimals);
@@ -188,28 +294,61 @@ export class ArbitrageEngine extends EventEmitter {
     const grossProfit = sellPrice.sub(buyPrice);
     const profitPercent = grossProfit.mul(10000).div(buyPrice).toNumber() / 100;
 
-    // Calculate gas costs
-    const gasCost = this.gasManager.calculateArbitrageGasCost(
-      bestBuy.dex,
-      bestSell.dex,
-      await this.gasManager.getOptimalGasPrice()
-    );
+    // Skip if profit is too small to be realistic
+    if (profitPercent < 0.01) {
+      return null;
+    }
 
-    const netProfit = grossProfit.sub(gasCost.totalCostWei);
+    try {
+      // Calculate gas costs with timeout
+      const gasCostPromise = this.gasManager.calculateArbitrageGasCost(
+        bestBuy.dex,
+        bestSell.dex,
+        await this.gasManager.getOptimalGasPrice()
+      );
 
-    return {
-      tokenA,
-      tokenB,
-      amountIn,
-      buyDex: bestBuy.dex,
-      sellDex: bestSell.dex,
-      buyPrice,
-      sellPrice,
-      profit: grossProfit,
-      profitPercent,
-      gasEstimate: gasCost.totalGas,
-      netProfit
-    };
+      const gasCost = await Promise.race([
+        gasCostPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Gas cost calculation timeout')), 3000)
+        )
+      ]);
+
+      const netProfit = grossProfit.sub(gasCost.totalCostWei);
+
+      return {
+        tokenA,
+        tokenB,
+        amountIn,
+        buyDex: bestBuy.dex,
+        sellDex: bestSell.dex,
+        buyPrice,
+        sellPrice,
+        profit: grossProfit,
+        profitPercent,
+        gasEstimate: gasCost.totalGas,
+        netProfit
+      };
+    } catch (gasError) {
+      // If gas calculation fails, use default estimates
+      const defaultGasEstimate = BigNumber.from(500000);
+      const defaultGasCost = defaultGasEstimate.mul(ethers.utils.parseUnits('30', 'gwei'));
+      const netProfit = grossProfit.sub(defaultGasCost);
+
+      return {
+        tokenA,
+        tokenB,
+        amountIn,
+        buyDex: bestBuy.dex,
+        sellDex: bestSell.dex,
+        buyPrice,
+        sellPrice,
+        profit: grossProfit,
+        profitPercent,
+        gasEstimate: defaultGasEstimate,
+        netProfit
+      };
+    }
   }
 
   private generateTokenPairs(): Array<{ tokenA: TokenInfo; tokenB: TokenInfo }> {

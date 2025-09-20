@@ -36,15 +36,44 @@ export class QuickSwapExchange extends BaseExchange {
   async getQuote(
     tokenIn: TokenInfo,
     tokenOut: TokenInfo,
-    amountIn: BigNumber
+    amountIn: BigNumber,
+    timeout: number = 5000
   ): Promise<QuoteResult> {
+    // Validate inputs
+    if (!tokenIn.address || !tokenOut.address || amountIn.lte(0)) {
+      throw new Error('Invalid input parameters for quote');
+    }
+
+    if (tokenIn.address.toLowerCase() === tokenOut.address.toLowerCase()) {
+      throw new Error('Cannot quote for same token');
+    }
+
     try {
+      // First check if pair exists
+      const pairAddress = await Promise.race([
+        this.factoryContract.getPair(tokenIn.address, tokenOut.address),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Factory call timeout')), 2000)
+        )
+      ]);
+
+      if (pairAddress === ethers.constants.AddressZero) {
+        throw new Error(`No QuickSwap pair found for ${tokenIn.symbol}/${tokenOut.symbol}`);
+      }
+
       const path = [tokenIn.address, tokenOut.address];
-      const amounts = await this.routerContract.getAmountsOut(amountIn, path);
+
+      // Add timeout to the quote call
+      const amountsPromise = this.routerContract.getAmountsOut(amountIn, path);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`QuickSwap quote timeout after ${timeout}ms`)), timeout);
+      });
+
+      const amounts = await Promise.race([amountsPromise, timeoutPromise]);
       const amountOut = amounts[amounts.length - 1];
 
-      if (amountOut.isZero()) {
-        throw new Error('No liquidity available');
+      if (amountOut.isZero() || amountOut.lt(amountIn.div(1000))) {
+        throw new Error('Insufficient liquidity or suspicious quote');
       }
 
       const priceImpact = await this.calculatePriceImpactForPair(
@@ -69,8 +98,8 @@ export class QuickSwapExchange extends BaseExchange {
         priceImpact,
         route: path
       };
-    } catch (error) {
-      throw new Error(`QuickSwap quote failed: ${error}`);
+    } catch (error: any) {
+      throw new Error(`QuickSwap quote failed for ${tokenIn.symbol} -> ${tokenOut.symbol}: ${error.message || error}`);
     }
   }
 
@@ -100,10 +129,12 @@ export class QuickSwapExchange extends BaseExchange {
     amountOut: BigNumber
   ): Promise<number> {
     try {
-      const pairAddress = await this.factoryContract.getPair(
-        tokenIn.address,
-        tokenOut.address
-      );
+      const pairAddress = await Promise.race([
+        this.factoryContract.getPair(tokenIn.address, tokenOut.address),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Factory timeout')), 2000)
+        )
+      ]);
 
       if (pairAddress === ethers.constants.AddressZero) {
         return 0;
@@ -115,12 +146,27 @@ export class QuickSwapExchange extends BaseExchange {
         this.provider
       );
 
-      const [reserve0, reserve1] = await pairContract.getReserves();
-      const token0 = await pairContract.token0();
-      
+      const [reservesPromise, token0Promise] = await Promise.all([
+        Promise.race([
+          pairContract.getReserves(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Reserves timeout')), 2000)
+          )
+        ]),
+        Promise.race([
+          pairContract.token0(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Token0 timeout')), 2000)
+          )
+        ])
+      ]);
+
+      const [reserve0, reserve1] = reservesPromise;
+      const token0 = token0Promise;
+
       let reserveIn: BigNumber;
       let reserveOut: BigNumber;
-      
+
       if (token0.toLowerCase() === tokenIn.address.toLowerCase()) {
         reserveIn = reserve0;
         reserveOut = reserve1;
@@ -130,8 +176,10 @@ export class QuickSwapExchange extends BaseExchange {
       }
 
       return this.calculatePriceImpact(amountIn, amountOut, reserveIn, reserveOut);
-    } catch (error) {
-      console.warn('Price impact calculation failed:', error);
+    } catch (error: any) {
+      if (!error.message?.includes('timeout')) {
+        console.warn('Price impact calculation failed:', error.message || error);
+      }
       return 0;
     }
   }

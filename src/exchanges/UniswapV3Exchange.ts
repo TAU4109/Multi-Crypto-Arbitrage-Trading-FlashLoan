@@ -41,7 +41,8 @@ export class UniswapV3Exchange extends BaseExchange {
   async getQuote(
     tokenIn: TokenInfo,
     tokenOut: TokenInfo,
-    amountIn: BigNumber
+    amountIn: BigNumber,
+    timeout: number = 5000
   ): Promise<QuoteResult> {
     let bestQuote: QuoteResult | null = null;
 
@@ -55,22 +56,61 @@ export class UniswapV3Exchange extends BaseExchange {
       throw new Error('Cannot quote for same token');
     }
 
-    for (const fee of this.fees) {
+    // Create timeout promise
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`Uniswap V3 quote timeout after ${timeout}ms`)), timeout);
+    });
+
+    try {
+      const quotePromise = this.getQuoteInternal(tokenIn, tokenOut, amountIn);
+      bestQuote = await Promise.race([quotePromise, timeoutPromise]);
+    } catch (error: any) {
+      if (error.message?.includes('timeout')) {
+        throw error;
+      }
+      throw new Error(`No valid Uniswap V3 quote found for ${tokenIn.symbol} -> ${tokenOut.symbol}. ${error.message || 'Unknown error'}`);
+    }
+
+    if (!bestQuote) {
+      throw new Error(`No valid Uniswap V3 quote found for ${tokenIn.symbol} -> ${tokenOut.symbol}. Pools may not exist or have insufficient liquidity.`);
+    }
+
+    return bestQuote;
+  }
+
+  private async getQuoteInternal(
+    tokenIn: TokenInfo,
+    tokenOut: TokenInfo,
+    amountIn: BigNumber
+  ): Promise<QuoteResult | null> {
+    let bestQuote: QuoteResult | null = null;
+
+    // Sort fees by popularity to check most liquid pools first
+    const sortedFees = [3000, 500, 10000];
+
+    for (const fee of sortedFees) {
       try {
         // First check if the pool exists by calling the factory
         const poolAddress = await this.getPoolAddress(tokenIn.address, tokenOut.address, fee);
         if (poolAddress === ethers.constants.AddressZero) {
-          console.log(`Pool does not exist for ${tokenIn.symbol}/${tokenOut.symbol} with fee ${fee}`);
           continue;
         }
 
-        const amountOut = await this.quoterContract.callStatic.quoteExactInputSingle(
+        // Use a timeout for the quote call itself
+        const quoteCallPromise = this.quoterContract.callStatic.quoteExactInputSingle(
           tokenIn.address,
           tokenOut.address,
           fee,
           amountIn,
           0
         );
+
+        const amountOut = await Promise.race([
+          quoteCallPromise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Quote call timeout')), 3000)
+          )
+        ]);
 
         if (amountOut.gt(0)) {
           const gasEstimate = await this.estimateSwapGas(
@@ -86,7 +126,7 @@ export class UniswapV3Exchange extends BaseExchange {
             amountIn,
             amountOut,
             gasEstimate,
-            priceImpact: 0, // Uniswap V3 doesn't provide direct price impact
+            priceImpact: 0,
             route: [tokenIn.address, tokenOut.address]
           };
 
@@ -95,17 +135,12 @@ export class UniswapV3Exchange extends BaseExchange {
           }
         }
       } catch (error: any) {
-        // Log specific error types for debugging
-        if (error.code === 'CALL_EXCEPTION') {
-          console.warn(`Uniswap V3 CALL_EXCEPTION for ${tokenIn.symbol}/${tokenOut.symbol} fee ${fee}: Pool likely doesn't exist or has no liquidity`);
-        } else {
-          console.warn(`Uniswap V3 quote failed for fee ${fee}:`, error.message || error);
+        // Only log if it's not a timeout error
+        if (!error.message?.includes('timeout')) {
+          console.warn(`Uniswap V3 quote failed for ${tokenIn.symbol}/${tokenOut.symbol} fee ${fee}: ${error.message || 'Unknown error'}`);
         }
+        continue;
       }
-    }
-
-    if (!bestQuote) {
-      throw new Error(`No valid Uniswap V3 quote found for ${tokenIn.symbol} -> ${tokenOut.symbol}. Pools may not exist or have insufficient liquidity.`);
     }
 
     return bestQuote;
@@ -192,14 +227,24 @@ export class UniswapV3Exchange extends BaseExchange {
     }
 
     try {
-      const poolAddress = await this.factoryContract.getPool(tokenA, tokenB, fee);
+      // Add timeout to factory call
+      const poolAddressPromise = this.factoryContract.getPool(tokenA, tokenB, fee);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Factory call timeout')), 2000);
+      });
+
+      const poolAddress = await Promise.race([poolAddressPromise, timeoutPromise]);
 
       // Cache the result
       this.poolCache.set(cacheKey, poolAddress);
 
       return poolAddress;
-    } catch (error) {
-      console.warn(`Failed to get pool address for ${tokenA}/${tokenB} fee ${fee}:`, error);
+    } catch (error: any) {
+      if (error.message?.includes('timeout')) {
+        console.warn(`Factory call timeout for ${tokenA}/${tokenB} fee ${fee}`);
+      } else {
+        console.warn(`Failed to get pool address for ${tokenA}/${tokenB} fee ${fee}:`, error.message || error);
+      }
 
       // Cache the failure too to avoid repeated calls
       this.poolCache.set(cacheKey, ethers.constants.AddressZero);

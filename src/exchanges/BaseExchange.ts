@@ -19,7 +19,8 @@ export abstract class BaseExchange {
   abstract getQuote(
     tokenIn: TokenInfo,
     tokenOut: TokenInfo,
-    amountIn: BigNumber
+    amountIn: BigNumber,
+    timeout?: number
   ): Promise<QuoteResult>;
 
   abstract executeSwap(

@@ -53,28 +53,63 @@ export class BatchQuoteEngine {
   async getBatchQuotes(
     tokenIn: TokenInfo,
     tokenOut: TokenInfo,
-    amountIn: BigNumber
+    amountIn: BigNumber,
+    timeout: number = 10000
   ): Promise<QuoteResult[]> {
-    const promises = Array.from(this.exchanges.entries())
-      .filter(([_, exchange]) => EXCHANGES[exchange.getName().replace(' ', '_').toUpperCase()]?.enabled)
-      .map(async ([name, exchange]) => {
-        try {
-          const quote = await exchange.getQuote(tokenIn, tokenOut, amountIn);
-          return { ...quote, dex: name };
-        } catch (error) {
-          console.warn(`Quote failed for ${name}:`, error);
-          return null;
-        }
+    const enabledExchanges = Array.from(this.exchanges.entries())
+      .filter(([_, exchange]) => {
+        const exchangeKey = exchange.getName().replace(' ', '_').toUpperCase();
+        return EXCHANGES[exchangeKey]?.enabled;
       });
 
-    const results = await Promise.allSettled(promises);
-    
-    return results
-      .filter((result): result is PromiseFulfilledResult<QuoteResult | null> => 
-        result.status === 'fulfilled' && result.value !== null
-      )
-      .map(result => result.value!)
-      .sort((a, b) => b.amountOut.sub(a.amountOut).gt(0) ? 1 : -1);
+    if (enabledExchanges.length === 0) {
+      console.warn('No enabled exchanges found');
+      return [];
+    }
+
+    const promises = enabledExchanges.map(async ([name, exchange]) => {
+      try {
+        // Use individual timeout for each exchange
+        const exchangeTimeout = Math.min(timeout / enabledExchanges.length, 5000);
+        const quote = await exchange.getQuote(tokenIn, tokenOut, amountIn, exchangeTimeout);
+        return { ...quote, dex: name };
+      } catch (error: any) {
+        console.warn(`Quote failed for ${name} (${tokenIn.symbol}->${tokenOut.symbol}): ${error.message || error}`);
+        return null;
+      }
+    });
+
+    // Add overall timeout to the batch operation
+    const batchTimeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`Batch quote timeout after ${timeout}ms`)), timeout);
+    });
+
+    try {
+      const results = await Promise.race([
+        Promise.allSettled(promises),
+        batchTimeout
+      ]);
+
+      const validQuotes = results
+        .filter((result): result is PromiseFulfilledResult<QuoteResult | null> =>
+          result.status === 'fulfilled' && result.value !== null
+        )
+        .map(result => result.value!)
+        .sort((a, b) => b.amountOut.sub(a.amountOut).gt(0) ? 1 : -1);
+
+      if (validQuotes.length === 0) {
+        console.warn(`No valid quotes found for ${tokenIn.symbol} -> ${tokenOut.symbol}`);
+      }
+
+      return validQuotes;
+    } catch (error: any) {
+      if (error.message?.includes('timeout')) {
+        console.warn(`Batch quote operation timed out for ${tokenIn.symbol} -> ${tokenOut.symbol}`);
+      } else {
+        console.error(`Batch quote error for ${tokenIn.symbol} -> ${tokenOut.symbol}:`, error);
+      }
+      return [];
+    }
   }
 
   async getMulticallQuotes(
