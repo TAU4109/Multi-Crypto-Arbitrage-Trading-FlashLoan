@@ -86,7 +86,7 @@ export class UniswapV3Exchange extends BaseExchange {
     let bestQuote: QuoteResult | null = null;
 
     // Sort fees by popularity to check most liquid pools first
-    const sortedFees = [3000, 500, 10000];
+    const sortedFees = [3000, 500]; // Remove 1% fee tier for stability
 
     for (const fee of sortedFees) {
       try {

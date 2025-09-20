@@ -69,7 +69,7 @@ export class BatchQuoteEngine {
     tokenIn: TokenInfo,
     tokenOut: TokenInfo,
     amountIn: BigNumber,
-    timeout: number = 15000
+    timeout: number = 12000
   ): Promise<QuoteResult[]> {
     console.log(`Getting batch quotes for ${tokenIn.symbol} -> ${tokenOut.symbol} (${ethers.utils.formatUnits(amountIn, tokenIn.decimals)} ${tokenIn.symbol})`);
 
@@ -90,7 +90,7 @@ export class BatchQuoteEngine {
       const startTime = Date.now();
       try {
         // Use individual timeout for each exchange
-        const exchangeTimeout = Math.min(timeout / enabledExchanges.length, 8000);
+        const exchangeTimeout = Math.min(timeout / enabledExchanges.length, 6000);
         const quote = await exchange.getQuote(tokenIn, tokenOut, amountIn, exchangeTimeout);
         const duration = Date.now() - startTime;
         console.log(`✅ ${name} quote: ${ethers.utils.formatUnits(quote.amountOut, tokenOut.decimals)} ${tokenOut.symbol} (${duration}ms)`);
