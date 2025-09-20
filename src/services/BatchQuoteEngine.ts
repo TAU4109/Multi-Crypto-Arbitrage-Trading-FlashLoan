@@ -31,31 +31,48 @@ export class BatchQuoteEngine {
   }
 
   private initializeExchanges(): void {
-    this.exchanges.set(
-      'UNISWAP_V3',
-      new UniswapV3Exchange(
-        this.provider,
-        EXCHANGES.UNISWAP_V3.router,
-        EXCHANGES.UNISWAP_V3.quoter!
-      )
-    );
+    try {
+      console.log('Initializing exchanges...');
 
-    this.exchanges.set(
-      'QUICKSWAP',
-      new QuickSwapExchange(
-        this.provider,
-        EXCHANGES.QUICKSWAP.router,
-        EXCHANGES.QUICKSWAP.factory!
-      )
-    );
+      if (EXCHANGES.UNISWAP_V3?.enabled) {
+        this.exchanges.set(
+          'UNISWAP_V3',
+          new UniswapV3Exchange(
+            this.provider,
+            EXCHANGES.UNISWAP_V3.router,
+            EXCHANGES.UNISWAP_V3.quoter!
+          )
+        );
+        console.log('✅ Uniswap V3 exchange initialized');
+      }
+
+      if (EXCHANGES.QUICKSWAP?.enabled) {
+        this.exchanges.set(
+          'QUICKSWAP',
+          new QuickSwapExchange(
+            this.provider,
+            EXCHANGES.QUICKSWAP.router,
+            EXCHANGES.QUICKSWAP.factory!
+          )
+        );
+        console.log('✅ QuickSwap exchange initialized');
+      }
+
+      console.log(`Total exchanges initialized: ${this.exchanges.size}`);
+    } catch (error) {
+      console.error('Error initializing exchanges:', error);
+      throw error;
+    }
   }
 
   async getBatchQuotes(
     tokenIn: TokenInfo,
     tokenOut: TokenInfo,
     amountIn: BigNumber,
-    timeout: number = 10000
+    timeout: number = 15000
   ): Promise<QuoteResult[]> {
+    console.log(`Getting batch quotes for ${tokenIn.symbol} -> ${tokenOut.symbol} (${ethers.utils.formatUnits(amountIn, tokenIn.decimals)} ${tokenIn.symbol})`);
+
     const enabledExchanges = Array.from(this.exchanges.entries())
       .filter(([_, exchange]) => {
         const exchangeKey = exchange.getName().replace(' ', '_').toUpperCase();
@@ -67,21 +84,30 @@ export class BatchQuoteEngine {
       return [];
     }
 
+    console.log(`Querying ${enabledExchanges.length} exchanges: ${enabledExchanges.map(([name]) => name).join(', ')}`);
+
     const promises = enabledExchanges.map(async ([name, exchange]) => {
+      const startTime = Date.now();
       try {
         // Use individual timeout for each exchange
-        const exchangeTimeout = Math.min(timeout / enabledExchanges.length, 5000);
+        const exchangeTimeout = Math.min(timeout / enabledExchanges.length, 8000);
         const quote = await exchange.getQuote(tokenIn, tokenOut, amountIn, exchangeTimeout);
+        const duration = Date.now() - startTime;
+        console.log(`✅ ${name} quote: ${ethers.utils.formatUnits(quote.amountOut, tokenOut.decimals)} ${tokenOut.symbol} (${duration}ms)`);
         return { ...quote, dex: name };
       } catch (error: any) {
-        console.warn(`Quote failed for ${name} (${tokenIn.symbol}->${tokenOut.symbol}): ${error.message || error}`);
+        const duration = Date.now() - startTime;
+        console.warn(`❌ ${name} quote failed (${duration}ms): ${error.message || error}`);
         return null;
       }
     });
 
     // Add overall timeout to the batch operation
     const batchTimeout = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Batch quote timeout after ${timeout}ms`)), timeout);
+      setTimeout(() => {
+        console.warn(`Batch quote timeout after ${timeout}ms for ${tokenIn.symbol} -> ${tokenOut.symbol}`);
+        reject(new Error(`Batch quote timeout after ${timeout}ms`));
+      }, timeout);
     });
 
     try {
@@ -97,9 +123,11 @@ export class BatchQuoteEngine {
         .map(result => result.value!)
         .sort((a, b) => b.amountOut.sub(a.amountOut).gt(0) ? 1 : -1);
 
-      if (validQuotes.length === 0) {
-        console.warn(`No valid quotes found for ${tokenIn.symbol} -> ${tokenOut.symbol}`);
-      }
+      console.log(`Found ${validQuotes.length} valid quotes for ${tokenIn.symbol} -> ${tokenOut.symbol}`);
+
+      validQuotes.forEach((quote, index) => {
+        console.log(`  ${index + 1}. ${quote.dex}: ${ethers.utils.formatUnits(quote.amountOut, tokenOut.decimals)} ${tokenOut.symbol}`);
+      });
 
       return validQuotes;
     } catch (error: any) {

@@ -224,14 +224,14 @@ class ArbitrageBotApp {
       this.config.initialCapital
     );
 
-    // Initialize arbitrage engine
+    // Initialize arbitrage engine with more conservative settings
     this.arbitrageEngine = new ArbitrageEngine(this.provider, {
       minProfitThreshold: this.config.minProfitThreshold,
       maxSlippagePercent: this.config.maxSlippage,
       maxTradeAmountUSD: this.config.maxTradeSize,
-      gasLimitGwei: 100,
-      profitBufferPercent: 20,
-      updateIntervalMs: 30000 // 30 seconds
+      gasLimitGwei: 150, // Increased for Polygon
+      profitBufferPercent: 25, // More conservative
+      updateIntervalMs: 60000 // 60 seconds - less aggressive scanning
     });
 
     // Initialize MEV protection

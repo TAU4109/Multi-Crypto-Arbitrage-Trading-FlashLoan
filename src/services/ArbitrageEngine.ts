@@ -355,33 +355,34 @@ export class ArbitrageEngine extends EventEmitter {
     const tokens = Object.values(TOKENS);
     const pairs: Array<{ tokenA: TokenInfo; tokenB: TokenInfo }> = [];
 
-    // Focus on high-volume pairs
+    // Focus on most liquid and stable pairs only
     const priorityPairs = [
-      ['WMATIC', 'USDC'],
-      ['WETH', 'USDC'],
-      ['WBTC', 'WETH'],
-      ['DAI', 'USDC'],
+      ['WMATIC', 'USDC'], // Most liquid on Polygon
       ['USDC', 'USDC.e'], // Bridge arbitrage
-      ['WMATIC', 'WETH']
+      ['WETH', 'USDC']    // ETH pairs
     ];
 
     for (const [symbolA, symbolB] of priorityPairs) {
       const tokenA = tokens.find(t => t.symbol === symbolA);
       const tokenB = tokens.find(t => t.symbol === symbolB);
-      
+
       if (tokenA && tokenB) {
         pairs.push({ tokenA, tokenB });
+        console.log(`Added trading pair: ${symbolA}/${symbolB}`);
+      } else {
+        console.warn(`Token not found for pair: ${symbolA}/${symbolB}`);
       }
     }
 
+    console.log(`Generated ${pairs.length} token pairs for analysis`);
     return pairs;
   }
 
   private generateTradeAmounts(): BigNumber[] {
-    // Generate different trade sizes to test
-    const baseAmounts = [1000, 5000, 10000, 25000]; // USD values
-    
-    return baseAmounts.map(amount => 
+    // Use smaller, more realistic trade sizes to reduce slippage
+    const baseAmounts = [1000, 5000]; // USD values - reduced for stability
+
+    return baseAmounts.map(amount =>
       ethers.utils.parseUnits(amount.toString(), 6) // Assuming USDC (6 decimals)
     );
   }

@@ -109,10 +109,5 @@ export const EXCHANGES: Record<string, ExchangeConfig> = {
     factory: '0x5757371414417b8C6CAad45bAeF941aBc7d3Ab32',
     quoter: '0xa15F0D7377B2A0C0c10db057f641beD21028FC89',
     enabled: true
-  },
-  SUSHISWAP: {
-    name: 'SushiSwap',
-    router: '0x1b02da8cb0d097eb8d57a175b88c7d8b47997506',
-    enabled: true
   }
 };
